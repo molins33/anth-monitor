@@ -312,8 +312,13 @@
       var d = res[0], fd = res[1];
       var list = (d && d.order_book_details) || [];
       var item = null;
-      for (var k = 0; k < list.length; k++) { if (list[k].symbol === 'ANTHROPIC') { item = list[k]; break; } }
-      if (!item) throw new Error('ANTHROPIC 마켓을 찾을 수 없음');
+      for (var k = 0; k < list.length; k++) {
+        if (String(list[k].symbol).toUpperCase().indexOf('ANTHROPIC') >= 0) { item = list[k]; break; }
+      }
+      if (!item) {
+        var names = list.slice(0, 8).map(function (x) { return x.symbol; }).join(', ');
+        throw new Error('ANTHROPIC 마켓을 찾지 못함 (받은 마켓 ' + list.length + '개: ' + names + ')');
+      }
       var mark = parseFloat(item.mark_price);
       var px = parseFloat(item.last_trade_price || item.mark_price);
       if (!fin(mark) || !fin(px)) throw new Error('응답 값 오류');
@@ -330,6 +335,13 @@
       }
       return { px: px, mark: mark, fund1h: fund1h, apr: fin(fund1h) ? fund1h * 24 * 365 : null };
     });
+  }
+
+  function errText(err) {
+    var m = err && err.message ? err.message : String(err);
+    if (err && err.name === 'AbortError') return '시간 초과 (8초 내 응답 없음)';
+    if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return '요청이 막혔거나 네트워크 오류 (CORS 차단 가능성) · ' + m;
+    return m;
   }
 
   function flash(id, dir) {
@@ -351,12 +363,12 @@
         var pe = S.ent.mid;
         Object.assign(S.ent, e.value, { ok: true, ts: now });
         if (fin(pe)) flash('cardEnt', Math.sign(e.value.mid - pe));
-      } else { S.ent.ok = false; }
+      } else { S.ent.ok = false; S.ent.err = errText(e.reason); }
       if (l.status === 'fulfilled') {
         var pl = S.lh.px;
         Object.assign(S.lh, l.value, { ok: true, ts: now });
         if (fin(pl)) flash('cardLh', Math.sign(l.value.px - pl));
-      } else { S.lh.ok = false; }
+      } else { S.lh.ok = false; S.lh.err = errText(l.reason); }
 
       if (S.ent.ok && S.lh.ok && now - lastRecord >= RECORD_MS) record(now);
       render();
@@ -417,10 +429,11 @@
 
     var banner = $('banner');
     if (e.ok === false && l.ok === false) {
-      banner.textContent = '두 거래소 모두 응답이 없습니다. 네트워크를 확인해 주세요. 5초마다 자동으로 다시 시도합니다.';
+      banner.textContent = '두 거래소 모두 응답이 없습니다. Entropy: ' + e.err + ' / Lighter: ' + l.err + ' (5초마다 자동 재시도)';
       banner.hidden = false;
     } else if (e.ok === false || l.ok === false) {
-      banner.textContent = (e.ok === false ? 'Entropy' : 'Lighter') + ' 응답이 없어 마지막 정상 값을 표시 중입니다. 차트 기록도 복구될 때까지 멈춥니다.';
+      var who = e.ok === false ? 'Entropy' : 'Lighter';
+      banner.textContent = who + ' 응답 없음 → ' + (e.ok === false ? e.err : l.err) + ' · 마지막 정상 값을 표시 중이며 차트 기록은 복구될 때까지 멈춥니다.';
       banner.hidden = false;
     } else {
       banner.hidden = true;
