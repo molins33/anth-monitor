@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
+<meta name="referrer" content="no-referrer">
 <title>Anthropic Perp 모니터</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <style>
@@ -106,6 +107,11 @@
   th:first-child, td:first-child { text-align: left; }
   th { color: var(--ink-3); font-weight: 600; }
 
+  .cfg-help { margin-top: 8px; }
+  .cfg-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .cfg-row input { flex: 1 1 260px; min-width: 0; font: inherit; font-size: 13px; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+  .cfg-row input:focus-visible { outline: 2px solid var(--ink-2); outline-offset: 1px; }
+
   footer { color: var(--ink-3); font-size: 11px; text-align: center; line-height: 1.6; }
 
   @media (max-width: 640px) {
@@ -131,6 +137,16 @@
   </header>
 
   <div class="banner" id="banner" role="status" hidden></div>
+
+  <details class="tbl" id="cfgWrap">
+    <summary>Lighter 연결 설정 (프록시 주소)</summary>
+    <p class="sub cfg-help">Lighter 서버가 이 페이지의 직접 요청을 막을 때, 대신 전달해 주는 프록시 주소를 넣으세요. 비워두면 Lighter 서버에 직접 연결합니다.</p>
+    <div class="cfg-row">
+      <input id="lhBase" type="url" inputmode="url" autocomplete="off" placeholder="https://lh-proxy.내이름.workers.dev">
+      <button class="btn" id="lhSave" type="button">저장</button>
+      <button class="btn" id="lhReset" type="button">기본값</button>
+    </div>
+  </details>
 
   <section class="ex-grid" aria-label="거래소별 현재가와 펀딩비">
     <article class="card" id="cardEnt">
@@ -230,6 +246,17 @@
   var KEEP_MS = 24 * 3600 * 1000;
   var HIST_KEY = 'anth-perp-history-v1';
   var RANGE_KEY = 'anth-perp-range-v1';
+  var LH_KEY = 'anth-lh-base-v1';
+  var LH_DEFAULT = 'https://api.rh.lighter.xyz';
+  // 주소 뒤에 ?lh=https://프록시주소 를 붙여 열면 그 주소가 저장됩니다.
+  try {
+    var q = new URLSearchParams(location.search).get('lh');
+    if (q && /^https:\/\//.test(q)) localStorage.setItem(LH_KEY, q.replace(/\/+$/, ''));
+  } catch (e) {}
+  function lhBase() {
+    try { var v = localStorage.getItem(LH_KEY); if (v) return v; } catch (e) {}
+    return LH_DEFAULT;
+  }
 
   var $ = function (id) { return document.getElementById(id); };
   var css = getComputedStyle(document.documentElement);
@@ -304,9 +331,9 @@
   }
 
   function getLighter() {
-    var base = 'https://api.rh.lighter.xyz/api/v1/';
+    var base = lhBase() + '/api/v1/';
     return Promise.all([
-      fetchJSON(base + 'orderBookDetails'),
+      fetchProbe(base + 'orderBookDetails'),
       fetchJSON(base + 'funding-rates').catch(function () { return null; })
     ]).then(function (res) {
       var d = res[0], fd = res[1];
@@ -337,8 +364,23 @@
     });
   }
 
+  // 읽기 요청이 실패했을 때, 서버에 닿는지(no-cors)로 CORS 차단과 연결 불가를 구분합니다.
+  function fetchProbe(url) {
+    return fetchJSON(url).catch(function (err) {
+      if (!(err instanceof TypeError)) throw err;
+      var ac = new AbortController();
+      var tm = setTimeout(function () { ac.abort(); }, 6000);
+      return fetch(url, { mode: 'no-cors', signal: ac.signal }).then(function () {
+        throw new Error('서버에는 연결되지만 브라우저가 응답 읽기를 막음 (CORS 또는 서버가 이 페이지를 거부) · ' + err.message);
+      }, function () {
+        throw new Error('서버에 연결 자체가 안 됨 (네트워크·확장프로그램·DNS 차단) · ' + err.message);
+      }).finally(function () { clearTimeout(tm); });
+    });
+  }
+
   function errText(err) {
     var m = err && err.message ? err.message : String(err);
+    if (/^서버/.test(m)) return m;
     if (err && err.name === 'AbortError') return '시간 초과 (8초 내 응답 없음)';
     if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return '요청이 막혔거나 네트워크 오류 (CORS 차단 가능성) · ' + m;
     return m;
@@ -426,6 +468,7 @@
 
     setState('pillEnt', 'stEnt', e.ok);
     setState('pillLh', 'stLh', l.ok);
+    if (l.ok === false && !cfgOpened && lhBase() === LH_DEFAULT) { $('cfgWrap').open = true; cfgOpened = true; }
 
     var banner = $('banner');
     if (e.ok === false && l.ok === false) {
@@ -607,6 +650,24 @@
     else save();
   });
   window.addEventListener('pagehide', function () { save(); });
+
+  var cfgOpened = false;
+  $('lhBase').value = lhBase() === LH_DEFAULT ? '' : lhBase();
+  $('lhSave').addEventListener('click', function () {
+    var v = $('lhBase').value.trim().replace(/\/+$/, '');
+    try {
+      if (v && /^https:\/\//.test(v)) localStorage.setItem(LH_KEY, v);
+      else localStorage.removeItem(LH_KEY);
+    } catch (e) {}
+    S.lh.ok = null; S.lh.fund1h = null;
+    poll();
+  });
+  $('lhReset').addEventListener('click', function () {
+    try { localStorage.removeItem(LH_KEY); } catch (e) {}
+    $('lhBase').value = '';
+    S.lh.ok = null; S.lh.fund1h = null;
+    poll();
+  });
 
   /* ---------- 시작 ---------- */
   syncRangeButtons();
