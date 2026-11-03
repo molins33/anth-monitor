@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Anthropic Perp 모니터</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  /* Layout: 두 거래소 카드 → 가격차이 → 기간 선택 → 추이 차트 3종. 모바일 1열, 넓은 화면에서 2열. */
+  :root {
+    color-scheme: dark;
+    --bg: #0b0f14;
+    --surface: #121922;
+    --surface-2: #19222e;
+    --line: #212c3a;
+    --ink: #e6edf3;
+    --ink-2: #9aa7b8;
+    --ink-3: #6b7a8f;
+    --ent: #9b6bf2;
+    --lh: #12a87c;
+    --gap: #e0a93b;
+    --ok: #3fb950;
+    --bad: #f0616d;
+    --wait: #6b7a8f;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", "Apple SD Gothic Neo", sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font);
+    font-size: 14px;
+    line-height: 1.5;
+    padding-block: 16px 32px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  header.top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+  header.top > div { min-width: 0; }
+  h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; text-wrap: balance; }
+  .sub { color: var(--ink-3); font-size: 12px; margin-top: 2px; }
+  .status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; background: var(--surface); }
+  .pill b { font-weight: 600; color: var(--ink); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--wait); }
+  .pill[data-state="ok"] .dot { background: var(--ok); }
+  .pill[data-state="err"] .dot { background: var(--bad); }
+  .upd { font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .btn { font: inherit; font-size: 12px; font-weight: 600; color: var(--ink); background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 5px 12px; cursor: pointer; }
+  .btn:hover { border-color: var(--ink-3); }
+  .btn:focus-visible, summary:focus-visible { outline: 2px solid var(--ink-2); outline-offset: 2px; }
+
+  .banner { background: rgba(240, 97, 109, 0.1); border: 1px solid rgba(240, 97, 109, 0.4); color: var(--ink); border-radius: 8px; padding: 10px 14px; font-size: 13px; }
+
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; min-width: 0; transition: border-color 0.3s; }
+  .card.up { border-color: var(--ok); }
+  .card.down { border-color: var(--bad); }
+  .ex-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .card-h { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  .card-h h2 { font-size: 15px; font-weight: 700; }
+  .key { width: 10px; height: 10px; border-radius: 2px; background: var(--c); flex: none; }
+  .tag { font-size: 11px; color: var(--ink-3); }
+  .px { font-size: 32px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .px-l { font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+  .kv { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .kv dt { font-size: 11px; color: var(--ink-3); }
+  .kv dd { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+  .gap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; }
+  .gap-grid > div { min-width: 0; }
+  .lbl { font-size: 12px; color: var(--ink-3); }
+  .big { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.2; margin-top: 2px; }
+  .big small { font-size: 15px; font-weight: 600; color: var(--ink-2); margin-left: 4px; }
+  .note { font-size: 12px; color: var(--ink-2); margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .gap-key { color: var(--gap); }
+
+  .rangebar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .rangebar .lbl { margin-right: 4px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); }
+  .seg button { font: inherit; font-size: 12px; font-weight: 600; color: var(--ink-2); background: transparent; border: 0; border-right: 1px solid var(--line); padding: 6px 14px; cursor: pointer; }
+  .seg button:last-child { border-right: 0; }
+  .seg button[aria-pressed="true"] { background: var(--surface-2); color: var(--ink); }
+  .seg button:focus-visible { outline: 2px solid var(--ink-2); outline-offset: -2px; }
+
+  .charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .charts .wide { grid-column: 1 / -1; }
+  .chart-h { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 12px; margin-bottom: 10px; }
+  .chart-h h3 { font-size: 14px; font-weight: 700; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--ink-2); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .chart-box { position: relative; height: 240px; }
+  .chart-box.tall { height: 280px; }
+  .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 0 24px; color: var(--ink-3); font-size: 13px; pointer-events: none; }
+
+  details.tbl { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; }
+  details.tbl summary { cursor: pointer; font-weight: 600; font-size: 13px; color: var(--ink-2); }
+  .tbl-scroll { overflow-x: auto; margin-top: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--ink-3); font-weight: 600; }
+
+  footer { color: var(--ink-3); font-size: 11px; text-align: center; line-height: 1.6; }
+
+  @media (max-width: 640px) {
+    .ex-grid, .charts { grid-template-columns: minmax(0, 1fr); }
+    .px { font-size: 28px; }
+    .big { font-size: 24px; }
+  }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header class="top">
+    <div>
+      <h1>Anthropic Perp 모니터</h1>
+      <p class="sub">Entropy (Hyperliquid L1) · Lighter (Robinhood Chain)</p>
+    </div>
+    <div class="status">
+      <span class="pill" id="pillEnt" data-state="wait"><i class="dot"></i>Entropy <b id="stEnt">연결 중</b></span>
+      <span class="pill" id="pillLh" data-state="wait"><i class="dot"></i>Lighter <b id="stLh">연결 중</b></span>
+      <span class="upd" id="updTxt">–</span>
+      <button class="btn" id="refreshBtn" type="button">새로고침</button>
+    </div>
+  </header>
+
+  <div class="banner" id="banner" role="status" hidden></div>
+
+  <section class="ex-grid" aria-label="거래소별 현재가와 펀딩비">
+    <article class="card" id="cardEnt">
+      <div class="card-h"><span class="key" style="--c: var(--ent)"></span><h2>Entropy</h2><span class="tag">Hyperliquid L1 · 중간가 기준</span></div>
+      <div class="px" id="entPx">–</div>
+      <div class="px-l">호가 중간가 (Mid)</div>
+      <dl class="kv">
+        <div><dt>마크가</dt><dd id="entMark">–</dd></div>
+        <div><dt>펀딩 (1h)</dt><dd id="entFund">–</dd></div>
+        <div><dt>펀딩 APR</dt><dd id="entApr">–</dd></div>
+      </dl>
+    </article>
+    <article class="card" id="cardLh">
+      <div class="card-h"><span class="key" style="--c: var(--lh)"></span><h2>Lighter</h2><span class="tag">Robinhood Chain · 체결가 기준</span></div>
+      <div class="px" id="lhPx">–</div>
+      <div class="px-l">최근 체결가</div>
+      <dl class="kv">
+        <div><dt>마크가</dt><dd id="lhMark">–</dd></div>
+        <div><dt>펀딩 (1h)</dt><dd id="lhFund">–</dd></div>
+        <div><dt>펀딩 APR</dt><dd id="lhApr">–</dd></div>
+      </dl>
+    </article>
+  </section>
+
+  <section class="card" aria-label="두 거래소 간 차이">
+    <div class="gap-grid">
+      <div>
+        <div class="lbl">가격 차이 (Entropy − Lighter)</div>
+        <div class="big" id="gapVal"><span class="gap-key">–</span></div>
+        <div class="note" id="gapDir">Entropy 중간가 − Lighter 최근 체결가</div>
+      </div>
+      <div>
+        <div class="lbl">마크가 기준 차이</div>
+        <div class="big" id="gapMark">–</div>
+        <div class="note">Entropy 마크가 − Lighter 마크가</div>
+      </div>
+      <div>
+        <div class="lbl">펀딩 APR 차이</div>
+        <div class="big" id="spreadVal">–</div>
+        <div class="note" id="spreadSub">Entropy APR − Lighter APR</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="rangebar">
+    <span class="lbl">추이 기간</span>
+    <div class="seg" role="group" aria-label="추이 기간 선택">
+      <button type="button" data-range="900000" aria-pressed="false">15분</button>
+      <button type="button" data-range="3600000" aria-pressed="true">1시간</button>
+      <button type="button" data-range="21600000" aria-pressed="false">6시간</button>
+      <button type="button" data-range="86400000" aria-pressed="false">24시간</button>
+    </div>
+  </div>
+
+  <section class="charts" aria-label="추이 차트">
+    <div class="card wide">
+      <div class="chart-h">
+        <h3>가격 추이</h3>
+        <div class="legend"><span><i style="background: var(--ent)"></i>Entropy 중간가</span><span><i style="background: var(--lh)"></i>Lighter 체결가</span></div>
+      </div>
+      <div class="chart-box tall"><canvas id="cPrice" role="img" aria-label="Entropy와 Lighter의 가격 추이 선 그래프"></canvas><div class="empty" id="ePrice">데이터를 모으는 중입니다. 페이지를 열어두면 추이가 쌓입니다.</div></div>
+    </div>
+    <div class="card">
+      <div class="chart-h"><h3>가격 차이 추이 ($)</h3></div>
+      <div class="chart-box"><canvas id="cGap" role="img" aria-label="두 거래소 가격 차이 추이 선 그래프"></canvas><div class="empty" id="eGap">데이터를 모으는 중입니다.</div></div>
+    </div>
+    <div class="card">
+      <div class="chart-h">
+        <h3>펀딩 APR 추이 (%)</h3>
+        <div class="legend"><span><i style="background: var(--ent)"></i>Entropy</span><span><i style="background: var(--lh)"></i>Lighter</span></div>
+      </div>
+      <div class="chart-box"><canvas id="cFund" role="img" aria-label="두 거래소 펀딩 APR 추이 선 그래프"></canvas><div class="empty" id="eFund">데이터를 모으는 중입니다.</div></div>
+    </div>
+  </section>
+
+  <details class="tbl" id="tblWrap">
+    <summary>최근 기록을 표로 보기</summary>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>시간</th><th>Entropy</th><th>Lighter</th><th>가격 차이</th><th>Entropy APR</th><th>Lighter APR</th></tr></thead>
+        <tbody id="tblBody"></tbody>
+      </table>
+    </div>
+  </details>
+
+  <footer>
+    5초마다 두 거래소 API를 직접 조회합니다. 추이 기록은 이 브라우저에 최근 24시간까지 저장되고, 페이지를 열어둔 동안 쌓입니다.
+  </footer>
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  var POLL_MS = 5000;        // 시세 조회 주기
+  var RECORD_MS = 15000;     // 추이 기록 간격
+  var KEEP_MS = 24 * 3600 * 1000;
+  var HIST_KEY = 'anth-perp-history-v1';
+  var RANGE_KEY = 'anth-perp-range-v1';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var css = getComputedStyle(document.documentElement);
+  var tok = function (n) { return css.getPropertyValue(n).trim(); };
+  var C = {
+    ent: tok('--ent'), lh: tok('--lh'), gap: tok('--gap'),
+    line: tok('--line'), ink: tok('--ink'), ink2: tok('--ink-2'), ink3: tok('--ink-3'), surface: tok('--surface-2')
+  };
+
+  /* ---------- 상태 ---------- */
+  var S = {
+    ent: { ok: null, mid: null, mark: null, fund1h: null, apr: null, ts: 0 },
+    lh:  { ok: null, px: null, mark: null, fund1h: null, apr: null, ts: 0 }
+  };
+  var hist = [];             // [t, entMid, entMark, lhPx, lhMark, entApr, lhApr]
+  var range = 3600000;
+  var lastRecord = 0, lastSave = 0, inflight = false;
+
+  try {
+    var r = parseInt(localStorage.getItem(RANGE_KEY), 10);
+    if ([900000, 3600000, 21600000, 86400000].indexOf(r) >= 0) range = r;
+  } catch (e) {}
+  try {
+    var raw = JSON.parse(localStorage.getItem(HIST_KEY) || '[]');
+    var cutoff = Date.now() - KEEP_MS;
+    if (Array.isArray(raw)) hist = raw.filter(function (p) { return Array.isArray(p) && p[0] >= cutoff; });
+    if (hist.length) lastRecord = hist[hist.length - 1][0];
+  } catch (e) { hist = []; }
+
+  /* ---------- 포맷 ---------- */
+  function fin(v) { return typeof v === 'number' && isFinite(v); }
+  function usd(v, d) {
+    if (!fin(v)) return '–';
+    d = d == null ? 1 : d;
+    return '$' + v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+  }
+  function sgn(v, d, suffix) {
+    if (!fin(v)) return '–';
+    return (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(d) + (suffix || '');
+  }
+  function sgnUsd(v) { return fin(v) ? (v >= 0 ? '+$' : '−$') + Math.abs(v).toFixed(1) : '–'; }
+  function hm(t) { return new Date(t).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false }); }
+  function hms(t) { return new Date(t).toLocaleTimeString('ko-KR', { hour12: false }); }
+
+  /* ---------- 데이터 조회 ---------- */
+  function fetchJSON(url, opts) {
+    var ac = new AbortController();
+    var timer = setTimeout(function () { ac.abort(); }, 8000);
+    var o = Object.assign({ signal: ac.signal }, opts || {});
+    return fetch(url, o).then(function (res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    }).finally(function () { clearTimeout(timer); });
+  }
+
+  function getEntropy() {
+    return fetchJSON('https://api.hyperliquid.xyz/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'metaAndAssetCtxs', dex: 'io' })
+    }).then(function (d) {
+      var uni = d[0].universe, ctx = d[1];
+      var i = -1;
+      for (var k = 0; k < uni.length; k++) { if (String(uni[k].name).indexOf('ANTH') >= 0) { i = k; break; } }
+      if (i < 0) throw new Error('ANTH 마켓을 찾을 수 없음');
+      var mark = parseFloat(ctx[i].markPx);
+      var mid = parseFloat(ctx[i].midPx || ctx[i].markPx);
+      var f = parseFloat(ctx[i].funding);
+      if (!fin(mark) || !fin(mid) || !fin(f)) throw new Error('응답 값 오류');
+      return { mid: mid, mark: mark, fund1h: f * 100, apr: f * 24 * 365 * 100 };
+    });
+  }
+
+  function getLighter() {
+    var base = 'https://api.rh.lighter.xyz/api/v1/';
+    return Promise.all([
+      fetchJSON(base + 'orderBookDetails'),
+      fetchJSON(base + 'funding-rates').catch(function () { return null; })
+    ]).then(function (res) {
+      var d = res[0], fd = res[1];
+      var list = (d && d.order_book_details) || [];
+      var item = null;
+      for (var k = 0; k < list.length; k++) { if (list[k].symbol === 'ANTHROPIC') { item = list[k]; break; } }
+      if (!item) throw new Error('ANTHROPIC 마켓을 찾을 수 없음');
+      var mark = parseFloat(item.mark_price);
+      var px = parseFloat(item.last_trade_price || item.mark_price);
+      if (!fin(mark) || !fin(px)) throw new Error('응답 값 오류');
+      var fund1h = S.lh.fund1h;
+      var rates = fd && fd.funding_rates;
+      if (rates) {
+        var mid = fin(item.market_id) ? item.market_id : 38;
+        for (var j = 0; j < rates.length; j++) {
+          if (rates[j].market_id === mid && rates[j].exchange === 'lighter' && typeof rates[j].rate === 'number') {
+            fund1h = (rates[j].rate / 8) * 100;
+            break;
+          }
+        }
+      }
+      return { px: px, mark: mark, fund1h: fund1h, apr: fin(fund1h) ? fund1h * 24 * 365 : null };
+    });
+  }
+
+  function flash(id, dir) {
+    var el = $(id);
+    if (!dir) return;
+    el.classList.remove('up', 'down');
+    el.classList.add(dir > 0 ? 'up' : 'down');
+    setTimeout(function () { el.classList.remove('up', 'down'); }, 600);
+  }
+
+  function poll() {
+    if (inflight) return Promise.resolve();
+    inflight = true;
+    $('refreshBtn').disabled = true;
+    return Promise.allSettled([getEntropy(), getLighter()]).then(function (rs) {
+      var now = Date.now();
+      var e = rs[0], l = rs[1];
+      if (e.status === 'fulfilled') {
+        var pe = S.ent.mid;
+        Object.assign(S.ent, e.value, { ok: true, ts: now });
+        if (fin(pe)) flash('cardEnt', Math.sign(e.value.mid - pe));
+      } else { S.ent.ok = false; }
+      if (l.status === 'fulfilled') {
+        var pl = S.lh.px;
+        Object.assign(S.lh, l.value, { ok: true, ts: now });
+        if (fin(pl)) flash('cardLh', Math.sign(l.value.px - pl));
+      } else { S.lh.ok = false; }
+
+      if (S.ent.ok && S.lh.ok && now - lastRecord >= RECORD_MS) record(now);
+      render();
+      updateCharts();
+    }).finally(function () {
+      inflight = false;
+      $('refreshBtn').disabled = false;
+    });
+  }
+
+  function record(now) {
+    hist.push([now, S.ent.mid, S.ent.mark, S.lh.px, S.lh.mark, S.ent.apr, S.lh.apr]);
+    lastRecord = now;
+    var cutoff = now - KEEP_MS;
+    while (hist.length && hist[0][0] < cutoff) hist.shift();
+    if (now - lastSave >= 60000) save(now);
+    if ($('tblWrap').open) renderTable();
+  }
+
+  function save(now) {
+    lastSave = now || Date.now();
+    try { localStorage.setItem(HIST_KEY, JSON.stringify(hist)); } catch (e) {}
+  }
+
+  /* ---------- 화면 갱신 ---------- */
+  function setState(pillId, textId, ok) {
+    $(pillId).setAttribute('data-state', ok === null ? 'wait' : ok ? 'ok' : 'err');
+    $(textId).textContent = ok === null ? '연결 중' : ok ? '정상' : '응답 없음';
+  }
+
+  function render() {
+    var e = S.ent, l = S.lh;
+    $('entPx').textContent = usd(e.mid);
+    $('entMark').textContent = usd(e.mark);
+    $('entFund').textContent = fin(e.fund1h) ? sgn(e.fund1h, 5, '%') : '–';
+    $('entApr').textContent = fin(e.apr) ? sgn(e.apr, 1, '%') : '–';
+    $('lhPx').textContent = usd(l.px);
+    $('lhMark').textContent = usd(l.mark);
+    $('lhFund').textContent = fin(l.fund1h) ? sgn(l.fund1h, 5, '%') : '–';
+    $('lhApr').textContent = fin(l.apr) ? sgn(l.apr, 2, '%') : '–';
+
+    if (fin(e.mid) && fin(l.px)) {
+      var g = e.mid - l.px, gp = g / l.px * 100;
+      $('gapVal').innerHTML = '<span class="gap-key">' + sgnUsd(g) + '</span><small>(' + sgn(gp, 2, '%') + ')</small>';
+      $('gapDir').textContent = g > 0 ? 'Entropy가 Lighter보다 높음' : g < 0 ? 'Entropy가 Lighter보다 낮음' : '두 거래소 가격이 같음';
+    }
+    if (fin(e.mark) && fin(l.mark)) {
+      var gm = e.mark - l.mark, gmp = gm / l.mark * 100;
+      $('gapMark').innerHTML = sgnUsd(gm) + '<small>(' + sgn(gmp, 2, '%') + ')</small>';
+    }
+    if (fin(e.apr) && fin(l.apr)) {
+      $('spreadVal').textContent = sgn(e.apr - l.apr, 2, '%p');
+      $('spreadSub').textContent = 'Entropy ' + sgn(e.apr, 1, '%') + ' − Lighter ' + sgn(l.apr, 2, '%');
+    }
+
+    setState('pillEnt', 'stEnt', e.ok);
+    setState('pillLh', 'stLh', l.ok);
+
+    var banner = $('banner');
+    if (e.ok === false && l.ok === false) {
+      banner.textContent = '두 거래소 모두 응답이 없습니다. 네트워크를 확인해 주세요. 5초마다 자동으로 다시 시도합니다.';
+      banner.hidden = false;
+    } else if (e.ok === false || l.ok === false) {
+      banner.textContent = (e.ok === false ? 'Entropy' : 'Lighter') + ' 응답이 없어 마지막 정상 값을 표시 중입니다. 차트 기록도 복구될 때까지 멈춥니다.';
+      banner.hidden = false;
+    } else {
+      banner.hidden = true;
+    }
+    tickClock();
+  }
+
+  function tickClock() {
+    var last = Math.max(S.ent.ts, S.lh.ts);
+    $('updTxt').textContent = last ? '마지막 갱신 ' + Math.max(0, Math.round((Date.now() - last) / 1000)) + '초 전' : '–';
+  }
+
+  function renderTable() {
+    var rows = hist.slice(-20).reverse().map(function (p) {
+      var g = p[1] - p[3];
+      return '<tr><td>' + hms(p[0]) + '</td><td>' + usd(p[1]) + '</td><td>' + usd(p[3]) + '</td><td>' + sgnUsd(g) +
+        '</td><td>' + sgn(p[5], 1, '%') + '</td><td>' + sgn(p[6], 2, '%') + '</td></tr>';
+    });
+    $('tblBody').innerHTML = rows.join('') || '<tr><td colspan="6" style="text-align:left;color:var(--ink-3)">아직 기록이 없습니다.</td></tr>';
+  }
+
+  /* ---------- 차트 ---------- */
+  var crosshair = {
+    id: 'crosshair',
+    afterDatasetsDraw: function (c) {
+      var a = c.tooltip && c.tooltip.getActiveElements();
+      if (!a || !a.length) return;
+      var x = a[0].element.x, area = c.chartArea, ctx = c.ctx;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(154,167,184,0.5)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, area.top); ctx.lineTo(x, area.bottom); ctx.stroke();
+      ctx.restore();
+    }
+  };
+  var endLabels = {
+    id: 'endLabels',
+    afterDatasetsDraw: function (c) {
+      if (c.data.datasets.length < 2) return;
+      var ctx = c.ctx, area = c.chartArea;
+      ctx.save();
+      ctx.font = '600 11px ' + tok('--font');
+      ctx.fillStyle = C.ink2;
+      ctx.textAlign = 'right';
+      c.data.datasets.forEach(function (ds, i) {
+        var pts = c.getDatasetMeta(i).data;
+        if (!pts.length) return;
+        var p = pts[pts.length - 1];
+        var y = p.y - 9;
+        if (y < area.top + 8) y = p.y + 15;
+        ctx.fillText(ds.shortLabel || ds.label, Math.min(p.x, area.right), y);
+      });
+      ctx.restore();
+    }
+  };
+
+  var STEPS = { 900000: 180000, 3600000: 600000, 21600000: 3600000, 86400000: 14400000 };
+
+  function ds(label, color, short) {
+    return {
+      label: label, shortLabel: short, data: [], borderColor: color, backgroundColor: color,
+      borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, pointHoverBorderWidth: 2,
+      pointHoverBorderColor: C.surface, tension: 0
+    };
+  }
+
+  function mkChart(id, datasets, yFmt, tipFmt) {
+    return new Chart($(id), {
+      type: 'line',
+      data: { datasets: datasets },
+      plugins: [crosshair, endLabels],
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false, parsing: false, normalized: true,
+        interaction: { mode: 'index', intersect: false, axis: 'x' },
+        scales: {
+          x: {
+            type: 'linear',
+            grid: { color: C.line }, border: { color: C.line },
+            ticks: { color: C.ink3, callback: function (v) { return hm(v); } },
+            afterBuildTicks: function (scale) {
+              var step = STEPS[range] || 600000;
+              var off = new Date().getTimezoneOffset() * 60000;
+              var t = Math.ceil((scale.min - off) / step) * step + off;
+              var out = [];
+              for (; t <= scale.max; t += step) out.push({ value: t });
+              scale.ticks = out;
+            }
+          },
+          y: {
+            grace: '8%',
+            grid: { color: C.line }, border: { display: false },
+            ticks: { color: C.ink3, maxTicksLimit: 6, callback: function (v) { return yFmt(v); } }
+          }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: C.surface, borderColor: C.line, borderWidth: 1,
+            titleColor: C.ink, bodyColor: C.ink, padding: 10,
+            callbacks: {
+              title: function (items) { return items.length ? hms(items[0].parsed.x) : ''; },
+              label: function (c) { return c.dataset.label + ': ' + tipFmt(c.parsed.y); }
+            }
+          }
+        }
+      }
+    });
+  }
+
+  var charts = null;
+  function initCharts() {
+    if (typeof Chart === 'undefined') {
+      ['ePrice', 'eGap', 'eFund'].forEach(function (id) {
+        $(id).textContent = '차트 라이브러리를 불러오지 못했습니다. 네트워크를 확인하고 새로고침해 주세요.';
+        $(id).style.display = 'flex';
+      });
+      return;
+    }
+    Chart.defaults.font.family = tok('--font');
+    charts = {
+      price: mkChart('cPrice', [ds('Entropy 중간가', C.ent, 'Entropy'), ds('Lighter 체결가', C.lh, 'Lighter')],
+        function (v) { return '$' + v.toFixed(0); }, function (v) { return usd(v); }),
+      gap: mkChart('cGap', [ds('가격 차이', C.gap)],
+        function (v) { return '$' + v.toFixed(0); }, function (v) { return sgnUsd(v); }),
+      fund: mkChart('cFund', [ds('Entropy APR', C.ent, 'Entropy'), ds('Lighter APR', C.lh, 'Lighter')],
+        function (v) { return v.toFixed(0) + '%'; }, function (v) { return sgn(v, 2, '%'); })
+    };
+  }
+
+  function updateCharts() {
+    if (!charts) return;
+    var now = Date.now(), from = now - range;
+    var pts = hist.filter(function (p) { return p[0] >= from; });
+    var step = Math.ceil(pts.length / 360) || 1;
+    if (step > 1) pts = pts.filter(function (_, i) { return i % step === 0 || i === pts.length - 1; });
+
+    function xy(idx, fn) { return pts.map(function (p) { return { x: p[0], y: fn ? fn(p) : p[idx] }; }); }
+    charts.price.data.datasets[0].data = xy(1);
+    charts.price.data.datasets[1].data = xy(3);
+    charts.gap.data.datasets[0].data = xy(0, function (p) { return p[1] - p[3]; });
+    charts.fund.data.datasets[0].data = xy(5);
+    charts.fund.data.datasets[1].data = xy(6);
+
+    Object.keys(charts).forEach(function (k) {
+      var sx = charts[k].options.scales.x;
+      sx.min = from; sx.max = now;
+      charts[k].update('none');
+    });
+    var empty = pts.length < 2;
+    ['ePrice', 'eGap', 'eFund'].forEach(function (id) { $(id).style.display = empty ? 'flex' : 'none'; });
+  }
+
+  /* ---------- 이벤트 ---------- */
+  function syncRangeButtons() {
+    Array.prototype.forEach.call(document.querySelectorAll('.seg button'), function (b) {
+      b.setAttribute('aria-pressed', String(parseInt(b.getAttribute('data-range'), 10) === range));
+    });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('.seg button'), function (b) {
+    b.addEventListener('click', function () {
+      range = parseInt(b.getAttribute('data-range'), 10);
+      try { localStorage.setItem(RANGE_KEY, String(range)); } catch (e) {}
+      syncRangeButtons();
+      updateCharts();
+    });
+  });
+  $('refreshBtn').addEventListener('click', function () { poll(); });
+  $('tblWrap').addEventListener('toggle', function () { if (this.open) renderTable(); });
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') poll();
+    else save();
+  });
+  window.addEventListener('pagehide', function () { save(); });
+
+  /* ---------- 시작 ---------- */
+  syncRangeButtons();
+  initCharts();
+  updateCharts();
+  render();
+  poll();
+  setInterval(poll, POLL_MS);
+  setInterval(tickClock, 1000);
+})();
+</script>
+</body>
+</html>
